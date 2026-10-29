@@ -1,3 +1,8 @@
+const DEFAULT_SHORTCUT = 'c';
+const DEFAULT_ID_SHORTCUT = 'i';
+let shortcutKey = DEFAULT_SHORTCUT;
+let idShortcutKey = DEFAULT_ID_SHORTCUT;
+
 function showToast(message) {
   // Find all existing toasters
   let toasters = document.querySelectorAll('#b-toaster-bottom-left');
@@ -60,8 +65,17 @@ function showToast(message) {
 }
 
 
-function createCopyButton(link, title,isMainPage = false) {
+// MR ID as shown in the URL, e.g. 42 for .../merge_requests/42/diffs
+function getMrId(link) {
+  return link.match(/\/merge_requests\/(\d+)/)?.[1];
+}
+
+function createCopyButton(link, title,isMainPage = false, idOnly = false) {
   const copyToClipboard = (link, title) => {
+    if (idOnly) {
+      navigator.clipboard?.writeText(getMrId(link));
+      return;
+    }
     navigator.clipboard?.write([
       new ClipboardItem({
         'text/plain': new Blob([link], { type: 'text/plain' }),
@@ -72,25 +86,28 @@ function createCopyButton(link, title,isMainPage = false) {
 
   const btn = document.createElement('button');
   btn.type = 'button';
-  let tooltip_text = "Copy MR";
+  let tooltip_text = idOnly ? "Copy MR ID" : "Copy MR";
+  const key = idOnly ? idShortcutKey : shortcutKey;
+  const copyClass = idOnly ? 'js-mr-id-copy' : 'js-source-branch-copy';
   btn.setAttribute('data-toggle', 'tooltip');
   btn.setAttribute('data-container', 'body');
   btn.setAttribute('data-html', 'true');
   if(isMainPage){
-    btn.setAttribute('aria-keyshortcuts', 'c');
-    tooltip_text = tooltip_text + " <kbd class='flat gl-ml-2' aria-hidden=true>c</kbd>";
-    btn.className = 'btn gl-button btn-default btn-md btn-default-tertiary btn-block gl-flex gl-new-dropdown-toggle gl-new-dropdown-icon-only btn-icon gl-new-dropdown-toggle-no-caret js-source-branch-copy';
+    const shortcutLabel = key === key.toLowerCase() ? key : `Shift+${key}`;
+    btn.setAttribute('aria-keyshortcuts', shortcutLabel);
+    tooltip_text = tooltip_text + ` <kbd class='flat gl-ml-2' aria-hidden=true>${shortcutLabel}</kbd>`;
+    btn.className = `btn gl-button btn-default btn-md btn-default-tertiary btn-block gl-flex gl-new-dropdown-toggle gl-new-dropdown-icon-only btn-icon gl-new-dropdown-toggle-no-caret ${copyClass}`;
     btn.setAttribute('data-placement', 'bottom');
 
   }else{
-    btn.className = 'gl-button btn btn-icon btn-sm btn-default btn-default-tertiary !gl-hidden @md/panel:!gl-inline-block gl-mx-1 js-source-branch-copy';
+    btn.className = `gl-button btn btn-icon btn-sm btn-default btn-default-tertiary !gl-hidden @md/panel:!gl-inline-block gl-mx-1 ${copyClass}`;
     btn.setAttribute('data-placement', 'right');
 
   }
   btn.title = tooltip_text;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.classList.add('s16', 'gl-icon', 'gl-button-icon');
-  svg.innerHTML = `<use href="/assets/icons-62cd41f10569bb5050df02409792752f47c042aa91f8d59f11b48b79e724f90d.svg#copy-to-clipboard"></use>`;
+  svg.innerHTML = `<use href="/assets/icons-62cd41f10569bb5050df02409792752f47c042aa91f8d59f11b48b79e724f90d.svg#${idOnly ? 'hash' : 'copy-to-clipboard'}"></use>`;
   btn.appendChild(svg);
 
   
@@ -122,7 +139,9 @@ function addCopyButton() {
     if (title && !title.parentNode.querySelector('.js-source-branch-copy')) {
       const link = title.href;
       const btn = createCopyButton(link, title.textContent);
+      const idBtn = createCopyButton(link, title.textContent, false, true);
       title.parentNode.insertBefore(btn, title.nextSibling);
+      title.parentNode.insertBefore(idBtn, btn.nextSibling);
     }
   });
 
@@ -130,7 +149,11 @@ function addCopyButton() {
   if (mrTitle && !mrTitle.parentNode.querySelector('.js-source-branch-copy')) {
     const btn = createCopyButton(window.location.href, mrTitle.textContent, true);
     const wrapper = document.createElement('div');
+    wrapper.className = 'gl-flex';
     wrapper.appendChild(btn);
+    if (getMrId(window.location.href)) {
+      wrapper.appendChild(createCopyButton(window.location.href, mrTitle.textContent, true, true));
+    }
     mrTitle.parentNode.insertBefore(wrapper, mrTitle.nextSibling);
     
     // Add keyboard shortcut support
@@ -139,22 +162,26 @@ function addCopyButton() {
       const tag = e.target.tagName.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
     
-      // Only trigger on plain 'c' without modifiers
+      // Case-sensitive match: an uppercase shortcut means Shift+letter
+      const shortcut = [
+        { key: shortcutKey, copyClass: 'js-source-branch-copy', message: 'Copied MR to clipboard.' },
+        { key: idShortcutKey, copyClass: 'js-mr-id-copy', message: 'Copied MR ID to clipboard.' },
+      ].find((s) => s.key === e.key);
+
       if (
-        e.key.toLowerCase() === 'c' &&
+        shortcut &&
         !e.ctrlKey &&
         !e.altKey &&
-        !e.metaKey &&
-        !e.shiftKey
+        !e.metaKey
       ) {
         // Find the first visible copy button for MR title
         const btn =
-          document.querySelector('h1.title[data-testid="title-content"] + div .js-source-branch-copy') ||
-          document.querySelector('.issuable-list li.merge-request .issuable-main-info .js-source-branch-copy');
-    
+          document.querySelector(`h1.title[data-testid="title-content"] + div .${shortcut.copyClass}`) ||
+          document.querySelector(`.issuable-list li.merge-request .issuable-main-info .${shortcut.copyClass}`);
+
         if (btn) {
           btn.click(); // simulate click
-          showToast('Copied MR to clipboard.');
+          showToast(shortcut.message);
           e.preventDefault();
         }
       }
@@ -162,9 +189,15 @@ function addCopyButton() {
   }
 }
 
-addCopyButton();
+// Load the shortcuts before injecting buttons so the tooltips show the right keys
+chrome.storage.sync.get({ shortcutKey: DEFAULT_SHORTCUT, idShortcutKey: DEFAULT_ID_SHORTCUT }, (settings) => {
+  shortcutKey = settings?.shortcutKey || DEFAULT_SHORTCUT;
+  idShortcutKey = settings?.idShortcutKey || DEFAULT_ID_SHORTCUT;
 
-const observer = new MutationObserver(addCopyButton);
-observer.observe(document.body, { childList: true, subtree: true });
+  addCopyButton();
+
+  const observer = new MutationObserver(addCopyButton);
+  observer.observe(document.body, { childList: true, subtree: true });
+});
 
 
